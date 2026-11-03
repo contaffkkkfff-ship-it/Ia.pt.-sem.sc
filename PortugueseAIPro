@@ -1,0 +1,186 @@
+-- TAMANHO DO ARQUIVO: 8.23 KB (0.0080 MB; 0.000008 GB)
+-- PortugueseAIPro.lua | Assistente local em português para Roblox Studio
+-- Gratuito e sem API paga. Requer apenas HttpService para carregar o dicionário.
+-- Use em ServerScriptService no seu próprio jogo.
+
+local HttpService = game:GetService("HttpService")
+local AI = {}
+AI.Version = "2.0.0"
+AI.Name = "PortugueseAIPro"
+
+AI.WordListURLs = {
+    "https://raw.githubusercontent.com/fserb/pt-br/master/lexico",
+    "https://raw.githubusercontent.com/fserb/pt-br/master/conjuga%C3%A7%C3%B5es",
+}
+
+local words = {}
+local loaded = false
+local loading = false
+local memory = {nome = nil, idade = nil, ultimaIntencao = nil}
+local counters = {}
+
+local function normalize(text)
+    text = tostring(text or ""):lower()
+    local map = {
+        ["á"]="a", ["à"]="a", ["ã"]="a", ["â"]="a", ["ä"]="a",
+        ["é"]="e", ["è"]="e", ["ê"]="e", ["ë"]="e",
+        ["í"]="i", ["ì"]="i", ["î"]="i", ["ï"]="i",
+        ["ó"]="o", ["ò"]="o", ["õ"]="o", ["ô"]="o", ["ö"]="o",
+        ["ú"]="u", ["ù"]="u", ["û"]="u", ["ü"]="u", ["ç"]="c",
+    }
+    for a, b in pairs(map) do text = text:gsub(a, b) end
+    return text:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function contains(text, phrase)
+    return string.find(normalize(text), normalize(phrase), 1, true) ~= nil
+end
+
+local function choose(intent, options)
+    counters[intent] = (counters[intent] or 0) + 1
+    return options[((counters[intent] - 1) % #options) + 1]
+end
+
+local function addWords(text)
+    for word in text:gmatch("[^\r\n]+") do
+        word = normalize(word)
+        if word ~= "" then words[word] = true end
+    end
+end
+
+function AI.Carregar()
+    if loaded then return true, "Dicionário já carregado" end
+    if loading then return false, "O dicionário ainda está carregando" end
+    loading = true
+    local carregadas = 0
+    local ultimoErro
+    for _, url in ipairs(AI.WordListURLs) do
+        local ok, response = pcall(function() return HttpService:GetAsync(url, true) end)
+        if ok then
+            addWords(response)
+            carregadas += 1
+        else
+            ultimoErro = tostring(response)
+        end
+    end
+    loading = false
+    loaded = next(words) ~= nil
+    if not loaded then return false, ultimoErro or "Não foi possível carregar o dicionário" end
+    return true, "Fontes carregadas: " .. tostring(carregadas) .. "; palavras: " .. tostring(AI.Quantidade())
+end
+
+function AI.Quantidade()
+    local n = 0
+    for _ in pairs(words) do n += 1 end
+    return n
+end
+
+function AI.TemPalavra(word)
+    if not loaded then
+        local ok, err = AI.Carregar()
+        if not ok then return false, err end
+    end
+    return words[normalize(word)] == true
+end
+
+function AI.DefinirNome(nome)
+    nome = tostring(nome or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if #nome >= 1 and #nome <= 30 then memory.nome = nome end
+    return memory.nome
+end
+
+function AI.CalcularIdade(anoNascimento, mesNascimento, diaNascimento, anoAtual, mesAtual, diaAtual)
+    local y, m, d = tonumber(anoNascimento), tonumber(mesNascimento) or 1, tonumber(diaNascimento) or 1
+    if not y then return nil, "Informe o ano de nascimento" end
+    local now = os.date("*t")
+    anoAtual, mesAtual, diaAtual = tonumber(anoAtual) or now.year, tonumber(mesAtual) or now.month, tonumber(diaAtual) or now.day
+    local idade = anoAtual - y
+    if mesAtual < m or (mesAtual == m and diaAtual < d) then idade -= 1 end
+    if idade < 0 or idade > 150 then return nil, "Data de nascimento inválida" end
+    memory.idade = idade
+    return idade
+end
+
+local function detectIntent(text)
+    local t = normalize(text)
+    if t:match("^oi$") or t:match("^ola$") or contains(t, "bom dia") or contains(t, "boa tarde") or contains(t, "boa noite") then return "saudacao" end
+    if contains(t, "quem e voce") or contains(t, "o que voce e") or contains(t, "seu nome") then return "identidade" end
+    if contains(t, "como voce esta") or contains(t, "tudo bem") then return "estado" end
+    if contains(t, "obrigad") or contains(t, "valeu") then return "agradecimento" end
+    if contains(t, "tchau") or contains(t, "ate mais") or contains(t, "ate logo") then return "despedida" end
+    if contains(t, "qual minha idade") or contains(t, "quantos anos eu tenho") then return "idade_salva" end
+    if contains(t, "nasci em") or contains(t, "ano de nascimento") or contains(t, "calcula minha idade") then return "idade" end
+    if contains(t, "meu nome e") or contains(t, "me chamo") then return "nome" end
+    if t:match("^[%d%s%p]+[%+%-%*%/]%s*[%d%s%p]+$") then return "conta" end
+    if contains(t, "ajuda") or contains(t, "o que voce sabe fazer") then return "ajuda" end
+    return "desconhecida"
+end
+
+local function extractName(text)
+    return text:match("[Mm]eu nome [eé] ([%wÀ-ÿ _%-]+)") or text:match("[Mm]e chamo ([%wÀ-ÿ _%-]+)")
+end
+
+local function extractBirthYear(text)
+    return text:match("nasci em%s+(%d%d%d%d)") or text:match("nascimento%s*:%s*(%d%d%d%d)") or text:match("(%d%d%d%d)")
+end
+
+function AI.Responder(message, player)
+    local original = tostring(message or "")
+    local intent = detectIntent(original)
+    memory.ultimaIntencao = intent
+
+    local name = extractName(original)
+    if name then AI.DefinirNome(name:gsub("[.!?,].*$", "")) end
+
+    if intent == "saudacao" then
+        local who = memory.nome and ", " .. memory.nome or ""
+        if contains(original, "bom dia") then return choose(intent, {"Bom dia" .. who .. "! Como posso ajudar?", "Bom dia" .. who .. "! Estou pronto para conversar."}) end
+        if contains(original, "boa tarde") then return choose(intent, {"Boa tarde" .. who .. "!", "Boa tarde" .. who .. "! O que você precisa?"}) end
+        if contains(original, "boa noite") then return choose(intent, {"Boa noite" .. who .. "!", "Boa noite" .. who .. "! Como posso ajudar?"}) end
+        return choose(intent, {"Oi" .. who .. "! Como posso ajudar?", "Olá" .. who .. "! Pode falar.", "Oi! Estou aqui para conversar."})
+    elseif intent == "identidade" then
+        return "Eu sou uma assistente local em português feita em Luau para o seu jogo Roblox."
+    elseif intent == "estado" then
+        return choose(intent, {"Estou funcionando bem!", "Tudo certo por aqui.", "Estou pronta para ajudar."})
+    elseif intent == "agradecimento" then
+        return choose(intent, {"De nada!", "Por nada!", "Disponha.", "Fico feliz em ajudar."})
+    elseif intent == "despedida" then
+        return choose(intent, {"Até mais!", "Tchau! Volte quando quiser.", "Até logo!"})
+    elseif intent == "nome" then
+        return memory.nome and ("Prazer, " .. memory.nome .. "!") or "Prazer! Como posso te chamar?"
+    elseif intent == "idade" then
+        local year = extractBirthYear(original)
+        local idade, err = AI.CalcularIdade(year)
+        if idade then return "Você tem aproximadamente " .. idade .. " anos." end
+        return "Para calcular, diga algo como: 'nasci em 2010'."
+    elseif intent == "idade_salva" then
+        return memory.idade and ("Você tem aproximadamente " .. memory.idade .. " anos.") or "Ainda não sei sua idade. Diga em que ano você nasceu."
+    elseif intent == "ajuda" then
+        return "Posso cumprimentar, lembrar seu nome, calcular idade, responder frases comuns, verificar palavras e sugerir palavras."
+    elseif intent == "conta" then
+        return "Recebi uma conta, mas esta versão ainda não executa cálculos matemáticos automaticamente."
+    end
+
+    if contains(original, "o que significa") then
+        return "Posso procurar palavras no meu dicionário. Use API.TemPalavra('palavra') para verificar uma palavra."
+    end
+    return choose("desconhecida", {
+        "Entendi. Pode explicar de outro jeito?",
+        "Ainda estou aprendendo essa frase. Posso ajudar com palavras, saudações e idade.",
+        "Não encontrei uma resposta exata, mas posso tentar se você reformular.",
+    })
+end
+
+function AI.Sugerir(prefixo, limite)
+    if not loaded then local ok, err = AI.Carregar(); if not ok then return nil, err end end
+    prefixo, limite = normalize(prefixo), math.clamp(tonumber(limite) or 10, 1, 50)
+    local result = {}
+    for word in pairs(words) do
+        if word:sub(1, #prefixo) == prefixo then table.insert(result, word) end
+    end
+    table.sort(result)
+    while #result > limite do table.remove(result) end
+    return result
+end
+
+return AI
