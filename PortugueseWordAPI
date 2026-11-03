@@ -1,0 +1,136 @@
+-- TAMANHO DO ARQUIVO: 4.19 KB (0.0041 MB; 0.000004 GB)
+-- PortugueseWordAPI.lua | Consulta gratuita de palavras/frases em português no Roblox Studio
+-- Requer: Game Settings > Security > Allow HTTP Requests = ON
+-- Uso legítimo em scripts do seu próprio jogo. Não é um modelo generativo de IA.
+
+local HttpService = game:GetService("HttpService")
+
+local API = {}
+API.Version = "1.0.0"
+API.WordListURLs = {
+    -- Fonte MIT: https://github.com/fserb/pt-br
+    "https://raw.githubusercontent.com/fserb/pt-br/master/lexico",
+    "https://raw.githubusercontent.com/fserb/pt-br/master/conjuga%C3%A7%C3%B5es",
+}
+
+local cache = {}
+local loaded = false
+local loading = false
+local loadError = nil
+
+local accentMap = {
+    ["á"]="a", ["à"]="a", ["ã"]="a", ["â"]="a", ["ä"]="a",
+    ["Á"]="a", ["À"]="a", ["Ã"]="a", ["Â"]="a", ["Ä"]="a",
+    ["é"]="e", ["è"]="e", ["ê"]="e", ["ë"]="e",
+    ["É"]="e", ["È"]="e", ["Ê"]="e", ["Ë"]="e",
+    ["í"]="i", ["ì"]="i", ["î"]="i", ["ï"]="i",
+    ["Í"]="i", ["Ì"]="i", ["Î"]="i", ["Ï"]="i",
+    ["ó"]="o", ["ò"]="o", ["õ"]="o", ["ô"]="o", ["ö"]="o",
+    ["Ó"]="o", ["Ò"]="o", ["Õ"]="o", ["Ô"]="o", ["Ö"]="o",
+    ["ú"]="u", ["ù"]="u", ["û"]="u", ["ü"]="u",
+    ["Ú"]="u", ["Ù"]="u", ["Û"]="u", ["Ü"]="u",
+    ["ç"]="c", ["Ç"]="c",
+}
+
+local function normalize(text)
+    text = tostring(text or ""):lower()
+    for from, to in pairs(accentMap) do
+        text = text:gsub(from, to)
+    end
+    return text:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function addWords(response)
+    for word in response:gmatch("[^\r\n]+") do
+        word = normalize(word)
+        if word ~= "" then
+            cache[word] = true
+        end
+    end
+end
+
+function API.Carregar()
+    if loaded then return true end
+    if loading then return false, "carregando" end
+    loading = true
+    loadError = nil
+
+    for _, url in ipairs(API.WordListURLs) do
+        local ok, response = pcall(function()
+            return HttpService:GetAsync(url, true)
+        end)
+        if ok then
+            addWords(response)
+        else
+            loadError = "Não foi possível baixar: " .. url .. " | " .. tostring(response)
+        end
+    end
+
+    loading = false
+    loaded = next(cache) ~= nil
+    if not loaded then
+        return false, loadError or "Nenhuma palavra foi carregada"
+    end
+    return true, "Palavras carregadas: " .. tostring(API.Quantidade())
+end
+
+function API.Quantidade()
+    local total = 0
+    for _ in pairs(cache) do total += 1 end
+    return total
+end
+
+function API.TemPalavra(palavra)
+    if not loaded then
+        local ok, err = API.Carregar()
+        if not ok then return false, err end
+    end
+    return cache[normalize(palavra)] == true
+end
+
+function API.ValidarTexto(texto)
+    local ok, err = API.Carregar()
+    if not ok then return nil, err end
+    local validas, desconhecidas = {}, {}
+    for palavra in tostring(texto):gmatch("[%wÀ-ÿ]+") do
+        if API.TemPalavra(palavra) then
+            table.insert(validas, palavra)
+        else
+            table.insert(desconhecidas, palavra)
+        end
+    end
+    return {validas = validas, desconhecidas = desconhecidas}
+end
+
+function API.Sugerir(prefixo, limite)
+    local ok, err = API.Carregar()
+    if not ok then return nil, err end
+    prefixo = normalize(prefixo)
+    limite = math.clamp(tonumber(limite) or 10, 1, 50)
+    local resultado = {}
+    for palavra in pairs(cache) do
+        if palavra:sub(1, #prefixo) == prefixo then
+            table.insert(resultado, palavra)
+            if #resultado >= limite then break end
+        end
+    end
+    table.sort(resultado)
+    return resultado
+end
+
+-- Respostas simples para frases comuns; a lista de palavras não gera texto novo.
+function API.Responder(mensagem)
+    local texto = normalize(mensagem)
+    local respostas = {
+        ["oi"] = "Oi! Como posso ajudar?",
+        ["olá"] = "Olá! Como você está?",
+        ["bom dia"] = "Bom dia!",
+        ["boa tarde"] = "Boa tarde!",
+        ["boa noite"] = "Boa noite!",
+        ["como você está"] = "Estou funcionando bem!",
+        ["tudo bem"] = "Tudo bem por aqui!",
+    }
+    return respostas[texto] or "Eu reconheço palavras em português, mas ainda não sei responder essa frase."
+end
+
+return API
